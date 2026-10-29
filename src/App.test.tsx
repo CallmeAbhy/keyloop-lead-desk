@@ -3,6 +3,27 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { calculatePricing, mockApi } from "./api/mockBackend";
 import { formMasterStore } from "./schema/formSchema";
 
+// Safe localStorage mock for Vitest Node environment
+const localStorageMock = (() => {
+  let store: Record<string, string> = {};
+  return {
+    getItem: (key: string) => store[key] || null,
+    setItem: (key: string, value: string) => {
+      store[key] = value.toString();
+    },
+    clear: () => {
+      store = {};
+    },
+    removeItem: (key: string) => {
+      delete store[key];
+    },
+  };
+})();
+
+Object.defineProperty(global, "localStorage", {
+  value: localStorageMock,
+});
+
 describe("Keyloop Lead & CPQ Business Logic Suite", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -34,11 +55,11 @@ describe("Keyloop Lead & CPQ Business Logic Suite", () => {
     );
     expect(updated.rowVersion).toBe(target.rowVersion + 1);
   });
+
   it("supports Form Master draft creation and version publishing without mutating archived versions", () => {
     const initialPub = formMasterStore.getPublishedVersion();
     expect(initialPub.versionNumber).toBe("v1.0");
 
-    // Manager adds a custom attribute to Section 1 and publishes v1.1
     const modifiedSections = JSON.parse(JSON.stringify(initialPub.sections));
     modifiedSections[0].attributes.push({
       key: "tradeInRequired",
