@@ -19,7 +19,6 @@ import {
   TrainTrack,
   Webhook,
   UserPlus,
-  Lock,
   Users,
   Settings2,
   PlusCircle,

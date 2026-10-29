@@ -62,6 +62,7 @@ export interface LeadRecord {
     deliveryAddress: string;
     kycDocument: string;
     isCafSent: boolean;
+    selectedQuoteIds?: string[];
   };
   activities: ActivityLogItem[];
 }
