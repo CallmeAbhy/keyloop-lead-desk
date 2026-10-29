@@ -1,6 +1,7 @@
 // src/App.test.tsx
 import { describe, it, expect, beforeEach } from "vitest";
 import { calculatePricing, mockApi } from "./api/mockBackend";
+import { formMasterStore } from "./schema/formSchema";
 
 describe("Keyloop Lead & CPQ Business Logic Suite", () => {
   beforeEach(() => {
@@ -32,5 +33,32 @@ describe("Keyloop Lead & CPQ Business Logic Suite", () => {
       "Called customer to confirm BMW X5 quote",
     );
     expect(updated.rowVersion).toBe(target.rowVersion + 1);
+  });
+  it("supports Form Master draft creation and version publishing without mutating archived versions", () => {
+    const initialPub = formMasterStore.getPublishedVersion();
+    expect(initialPub.versionNumber).toBe("v1.0");
+
+    // Manager adds a custom attribute to Section 1 and publishes v1.1
+    const modifiedSections = JSON.parse(JSON.stringify(initialPub.sections));
+    modifiedSections[0].attributes.push({
+      key: "tradeInRequired",
+      label: "Trade-In Vehicle?",
+      type: "dropdown",
+      options: ["No", "Yes"],
+    });
+
+    const newPub = formMasterStore.publishVersion(
+      modifiedSections,
+      "Added Trade-In Vehicle attribute to Basic Details",
+      "Rajesh Singh (Sales Manager)",
+    );
+
+    expect(newPub.versionNumber).toBe("v1.1");
+    expect(newPub.status).toBe("PUBLISHED");
+    expect(
+      formMasterStore
+        .getPublishedVersion()
+        .sections[0].attributes.some((a) => a.key === "tradeInRequired"),
+    ).toBe(true);
   });
 });
