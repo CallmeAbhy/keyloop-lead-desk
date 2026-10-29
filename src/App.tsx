@@ -27,6 +27,8 @@ import {
   Save,
   History,
   LayoutDashboard,
+  Search,
+  SlidersHorizontal,
 } from "lucide-react";
 import {
   formMasterStore,
@@ -60,6 +62,12 @@ export default function App() {
   const [ageFilter, setAgeFilter] = useState<
     "ALL" | "POOL" | "MY_LEADS" | "THUNDER" | "FIRE" | "WATER"
   >("ALL");
+
+  // Advanced Search & Status Filter States
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("ALL");
+  const [showAdvancedSearch, setShowAdvancedSearch] = useState(false);
+
   const [currentUser, setCurrentUser] = useState<UserAccount>(ACCOUNTS[0]);
   const [activeView, setActiveView] = useState<"WORKSPACE" | "FORM_MASTER">(
     "WORKSPACE",
@@ -67,7 +75,6 @@ export default function App() {
   const [quickNote, setQuickNote] = useState("");
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
-  // Versioned Form Master State
   const [formVersions, setFormVersions] = useState<FormVersionRecord[]>(() =>
     formMasterStore.getAllVersions(),
   );
@@ -76,7 +83,6 @@ export default function App() {
     [formVersions],
   );
 
-  // Working Draft state inside Form Master Studio (Manager Only)
   const [builderSections, setBuilderSections] = useState<SectionSchema[]>(() =>
     JSON.parse(JSON.stringify(publishedForm.sections)),
   );
@@ -84,7 +90,6 @@ export default function App() {
     useState<SectionSchema["id"]>("basicDetails");
   const [changelogInput, setChangelogInput] = useState("");
 
-  // New Attribute Form State inside Form Master
   const [newAttrLabel, setNewAttrLabel] = useState("");
   const [newAttrKey, setNewAttrKey] = useState("");
   const [newAttrType, setNewAttrType] = useState<AttributeType>("string");
@@ -129,18 +134,41 @@ export default function App() {
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
+  // Advanced Search & Filter Pipeline
   const filteredLeads = useMemo(() => {
     return leads.filter((l) => {
-      if (ageFilter === "POOL") return !l.basicDetails.originatorRep;
-      if (ageFilter === "MY_LEADS")
-        return l.basicDetails.originatorRep === currentUser.name;
-      if (ageFilter === "THUNDER") return l.createdAtHoursAgo <= 1;
-      if (ageFilter === "FIRE")
-        return l.createdAtHoursAgo >= 6 && l.createdAtHoursAgo < 12;
-      if (ageFilter === "WATER") return l.createdAtHoursAgo >= 12;
+      // Age & Pool filters
+      if (ageFilter === "POOL" && l.basicDetails.originatorRep) return false;
+      if (
+        ageFilter === "MY_LEADS" &&
+        l.basicDetails.originatorRep !== currentUser.name
+      )
+        return false;
+      if (ageFilter === "THUNDER" && l.createdAtHoursAgo > 1) return false;
+      if (
+        ageFilter === "FIRE" &&
+        (l.createdAtHoursAgo < 6 || l.createdAtHoursAgo >= 12)
+      )
+        return false;
+      if (ageFilter === "WATER" && l.createdAtHoursAgo < 12) return false;
+
+      // Status dropdown filter
+      if (statusFilter !== "ALL" && l.basicDetails.leadStatus !== statusFilter)
+        return false;
+
+      // Advanced Search Query (Matches Name, Phone, Email, or Lead ID)
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchName = l.basicDetails.customerName.toLowerCase().includes(q);
+        const matchPhone = l.basicDetails.phone.toLowerCase().includes(q);
+        const matchEmail = l.basicDetails.email.toLowerCase().includes(q);
+        const matchId = l.id.toLowerCase().includes(q);
+        if (!matchName && !matchPhone && !matchEmail && !matchId) return false;
+      }
+
       return true;
     });
-  }, [leads, ageFilter, currentUser.name]);
+  }, [leads, ageFilter, currentUser.name, statusFilter, searchQuery]);
 
   const maxDiscountItem = useMemo(() => {
     return draft.productPricing.reduce(
@@ -375,11 +403,21 @@ export default function App() {
       summaryParts.push(`Quote: ${draft.quoteConfig.clientDecision}`);
     }
 
-    const totalDealValue = draft.productPricing.reduce(
+    // Calculate sum of only the selected quote IDs in CAF section!
+    const selectedQuotes: string[] = Array.isArray(
+      draft.cafSection.selectedQuoteIds,
+    )
+      ? draft.cafSection.selectedQuoteIds
+      : [];
+    const matchedVehicles = draft.productPricing.filter(
+      (v) =>
+        selectedQuotes.includes(v.vehicleModel) || selectedQuotes.length === 0,
+    );
+    const totalDealValue = matchedVehicles.reduce(
       (acc, v) => acc + v.netPrice,
       0,
     );
-    const vehicleNames = draft.productPricing
+    const vehicleNames = matchedVehicles
       .map((v) => `${v.vehicleModel} ($${v.netPrice.toLocaleString()})`)
       .join(" + ");
 
@@ -387,7 +425,7 @@ export default function App() {
       ...draft,
       cafSection: {
         ...draft.cafSection,
-        consolidatedOrderSummary: `${draft.productPricing.length} Vehicle(s): ${vehicleNames} | Total Deal Value: $${totalDealValue.toLocaleString()}`,
+        consolidatedOrderSummary: `${matchedVehicles.length} Selected Quote(s): ${vehicleNames} | Total Final Order: $${totalDealValue.toLocaleString()}`,
       },
     };
 
@@ -410,10 +448,20 @@ export default function App() {
   };
 
   const handleDispatchCaf = () => {
-    const totalDealValue = draft.productPricing.reduce(
+    const selectedQuotes: string[] = Array.isArray(
+      draft.cafSection.selectedQuoteIds,
+    )
+      ? draft.cafSection.selectedQuoteIds
+      : [];
+    const matchedVehicles = draft.productPricing.filter(
+      (v) =>
+        selectedQuotes.includes(v.vehicleModel) || selectedQuotes.length === 0,
+    );
+    const totalDealValue = matchedVehicles.reduce(
       (acc, v) => acc + v.netPrice,
       0,
     );
+
     const updatedDraft: LeadRecord = {
       ...draft,
       basicDetails: { ...draft.basicDetails, leadStatus: "Converted" },
@@ -421,7 +469,7 @@ export default function App() {
     };
     const saved = mockApi.saveLead(
       updatedDraft,
-      `Dispatched Master CAF (${draft.cafSection.cafReferenceId}) to ${draft.basicDetails.email} for $${totalDealValue.toLocaleString()}. Deal Won!`,
+      `Dispatched Master CAF (${draft.cafSection.cafReferenceId}) bundling ${matchedVehicles.length} quote(s) to ${draft.basicDetails.email} for $${totalDealValue.toLocaleString()}. Deal Won!`,
       "CAF_DISPATCH",
       currentUser.name,
     );
@@ -445,7 +493,7 @@ export default function App() {
     triggerToast("Follow-up activity persisted to timeline!");
   };
 
-  // ================= FORM MASTER STUDIO HANDLERS (MANAGER ONLY) =================
+  // ================= FORM MASTER STUDIO HANDLERS =================
   const selectedBuilderSection = useMemo(
     () =>
       builderSections.find((s) => s.id === builderSelectedSectionId) ||
@@ -522,9 +570,7 @@ export default function App() {
       currentUser.name,
     );
     setFormVersions(formMasterStore.getAllVersions());
-    triggerToast(
-      "Saved Form Schema as Working Draft (Not visible to Reps yet).",
-    );
+    triggerToast("Saved Form Schema as Working Draft.");
   };
 
   const handlePublishNewVersion = () => {
@@ -563,6 +609,48 @@ export default function App() {
       disabledOverride ||
       isUnassigned ||
       isOwnedByOtherRep;
+
+    // Special handler for CAF section's quote selection multi-select so options populate dynamically from productPricing!
+    if (attr.key === "selectedQuoteIds") {
+      const availableVehicles = draft.productPricing.map((v) => v.vehicleModel);
+      const selectedList: string[] = Array.isArray(value) ? value : [];
+      const toggleQuote = (veh: string) => {
+        if (isReadonly) return;
+        if (selectedList.includes(veh)) {
+          onChange(selectedList.filter((i) => i !== veh));
+        } else {
+          onChange([...selectedList, veh]);
+        }
+      };
+      return (
+        <div className="space-y-1.5 pt-1">
+          <p className="text-[10px] text-slate-500">
+            Select which quote(s) to include in this CAF order (leaves empty to
+            include all):
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {availableVehicles.map((veh) => {
+              const active = selectedList.includes(veh);
+              return (
+                <button
+                  type="button"
+                  key={veh}
+                  disabled={isReadonly}
+                  onClick={() => toggleQuote(veh)}
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                    active
+                      ? "bg-emerald-600 text-white shadow-sm"
+                      : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                  }`}
+                >
+                  {active ? "✓ Selected: " : "+ Add: "} {veh.split("(")[0]}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
 
     if (attr.type === "dropdown") {
       return (
@@ -673,17 +761,15 @@ export default function App() {
                 Keyloop LeadDesk & CPQ Engine
               </h1>
               <span className="rounded bg-indigo-500/30 px-2 py-0.5 text-[10px] font-bold text-indigo-300">
-                Active Form: {publishedForm.versionNumber}
+                Schema: {publishedForm.versionNumber}
               </span>
             </div>
             <p className="text-[11px] text-slate-400">
-              Form Master Versioning • Webhook Deduplication • 5-Junction Metro
-              Flow
+              Advanced Search • Granular CAF Quote Bundling • Form Master
             </p>
           </div>
         </div>
 
-        {/* Center Top Bar: Either SLA Filters OR Module Switcher when Manager is logged in */}
         {activeView === "WORKSPACE" ? (
           <div className="flex flex-wrap items-center gap-1.5">
             <button
@@ -753,11 +839,10 @@ export default function App() {
           </div>
         ) : (
           <div className="rounded-lg bg-amber-500/20 px-3 py-1 text-xs font-semibold text-amber-300">
-            🛠️ Form Master Configuration Studio (Manager-Only Schema Versioning)
+            🛠️ Form Master Studio (Schema Versioning)
           </div>
         )}
 
-        {/* Right Top Bar: Form Master Button (Manager Only) + Account Switcher */}
         <div className="flex items-center gap-2">
           {currentUser.role === "MANAGER" && (
             <button
@@ -775,12 +860,12 @@ export default function App() {
               {activeView === "FORM_MASTER" ? (
                 <>
                   <LayoutDashboard className="h-3.5 w-3.5" />
-                  Back to Lead Workspace
+                  Back to Workspace
                 </>
               ) : (
                 <>
                   <Settings2 className="h-3.5 w-3.5" />
-                  Form Master Studio
+                  Form Master
                 </>
               )}
             </button>
@@ -822,9 +907,7 @@ export default function App() {
               setBuilderSections(
                 JSON.parse(JSON.stringify(resetForms[0].sections)),
               );
-              triggerToast(
-                "Reset Leads & Form Master versions to v1.0 baseline.",
-              );
+              triggerToast("Reset Leads & Form Master.");
             }}
             className="flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs text-slate-300 hover:bg-slate-700"
           >
@@ -840,14 +923,13 @@ export default function App() {
         </div>
       )}
 
-      {/* ================= VIEW 1: FORM MASTER STUDIO (SALES MANAGER ONLY) ================= */}
+      {/* ================= VIEW 1: FORM MASTER STUDIO ================= */}
       {activeView === "FORM_MASTER" && currentUser.role === "MANAGER" ? (
         <main className="mx-auto grid max-w-[1600px] grid-cols-12 gap-5 p-5">
-          {/* Left Column (3 cols): Form Sections & Version History */}
           <section className="col-span-12 space-y-4 lg:col-span-3">
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                1. Select Form Section to Configure
+                1. Select Form Section
               </h2>
               <div className="mt-3 space-y-2">
                 {builderSections.map((sec) => (
@@ -862,25 +944,18 @@ export default function App() {
                   >
                     <div className="text-xs font-bold">{sec.title}</div>
                     <div className="mt-0.5 text-[11px] text-slate-500">
-                      {sec.attributes.length} Attributes •{" "}
-                      {sec.isRepeatable ? "Cloneable" : "Singleton"}
+                      {sec.attributes.length} Attributes
                     </div>
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* Version History & Rollback Panel */}
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <h2 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-slate-500">
                 <History className="h-3.5 w-3.5 text-indigo-600" />
-                Schema Version Lifecycle ({formVersions.length})
+                Schema Versions ({formVersions.length})
               </h2>
-              <p className="mt-1 text-[11px] text-slate-500">
-                Only the <strong>PUBLISHED</strong> version is rendered on Sales
-                Rep screens.
-              </p>
-
               <div className="mt-3 space-y-2.5">
                 {formVersions.map((ver) => (
                   <div
@@ -897,39 +972,27 @@ export default function App() {
                       <span className="font-bold text-slate-900">
                         {ver.versionNumber}
                       </span>
-                      <span
-                        className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
-                          ver.status === "PUBLISHED"
-                            ? "bg-emerald-600 text-white"
-                            : ver.status === "DRAFT"
-                              ? "bg-amber-500 text-slate-950"
-                              : "bg-slate-300 text-slate-700"
-                        }`}
-                      >
+                      <span className="rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-bold text-white">
                         {ver.status}
                       </span>
                     </div>
                     <p className="mt-1 text-[11px] text-slate-700">
                       {ver.changelog}
                     </p>
-                    <div className="mt-2 flex items-center justify-between text-[10px] text-slate-500">
-                      <span>{ver.updatedAt}</span>
-                      {ver.status !== "PUBLISHED" && (
-                        <button
-                          onClick={() => handleRollbackVersion(ver)}
-                          className="font-bold text-indigo-600 hover:underline"
-                        >
-                          Activate & Publish
-                        </button>
-                      )}
-                    </div>
+                    {ver.status !== "PUBLISHED" && (
+                      <button
+                        onClick={() => handleRollbackVersion(ver)}
+                        className="mt-2 font-bold text-indigo-600 hover:underline"
+                      >
+                        Activate & Publish
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
             </div>
           </section>
 
-          {/* Center Column (5 cols): Current Section Attributes & Metadata Editor */}
           <section className="col-span-12 lg:col-span-5">
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="border-b border-slate-100 pb-3">
@@ -939,11 +1002,7 @@ export default function App() {
                 <h2 className="text-base font-bold text-slate-900">
                   {selectedBuilderSection.title}
                 </h2>
-                <p className="text-xs text-slate-500">
-                  {selectedBuilderSection.subtitle}
-                </p>
               </div>
-
               <div className="mt-4 space-y-2.5">
                 {selectedBuilderSection.attributes.map((attr) => (
                   <div
@@ -958,28 +1017,15 @@ export default function App() {
                         <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-800">
                           {attr.type}
                         </span>
-                        {attr.isSystemLocked && (
-                          <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">
-                            Core Engine Field
-                          </span>
-                        )}
                       </div>
                       <div className="mt-1 text-[11px] text-slate-500">
                         Key: <code>{attr.key}</code>
-                        {attr.dependsOn && (
-                          <span className="ml-2 font-medium text-amber-700">
-                            • Depends on: {attr.dependsOn.key} == "
-                            {attr.dependsOn.value}"
-                          </span>
-                        )}
                       </div>
                     </div>
-
                     {!attr.isSystemLocked && (
                       <button
                         onClick={() => handleRemoveCustomAttribute(attr.key)}
                         className="rounded-lg p-1.5 text-rose-600 hover:bg-rose-50"
-                        title="Remove custom attribute"
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
@@ -990,39 +1036,33 @@ export default function App() {
             </div>
           </section>
 
-          {/* Right Column (4 cols): Add New Attribute & Publish Version Controls */}
           <section className="col-span-12 space-y-4 lg:col-span-4">
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-indigo-600">
                 <PlusCircle className="h-4 w-4" />
-                Add New Attribute to "
-                {selectedBuilderSection.title.split(".")[1] ||
-                  selectedBuilderSection.title}
-                "
+                Add Custom Attribute
               </h3>
-
               <form
                 onSubmit={handleAddCustomAttribute}
                 className="mt-3 space-y-3"
               >
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-slate-700">
-                    Attribute Display Label *
+                    Display Label *
                   </label>
                   <input
                     type="text"
                     required
                     value={newAttrLabel}
                     onChange={(e) => setNewAttrLabel(e.target.value)}
-                    placeholder="e.g., Trade-In Vehicle Available? or EV Charger Needed?"
+                    placeholder="e.g., Trade-In Vehicle Available?"
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs"
                   />
                 </div>
-
                 <div className="grid grid-cols-2 gap-2.5">
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-700">
-                      Input Type
+                      Type
                     </label>
                     <select
                       value={newAttrType}
@@ -1031,216 +1071,224 @@ export default function App() {
                       }
                       className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs"
                     >
-                      <option value="string">String (Text)</option>
+                      <option value="string">String</option>
                       <option value="number">Number</option>
                       <option value="dropdown">Dropdown</option>
                       <option value="multiSelect">Multi-Select</option>
                       <option value="textarea">Textarea</option>
-                      <option value="datetime">Date / Time</option>
                     </select>
                   </div>
-
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-700">
-                      JSON Key (Optional)
+                      JSON Key
                     </label>
                     <input
                       type="text"
                       value={newAttrKey}
                       onChange={(e) => setNewAttrKey(e.target.value)}
-                      placeholder="auto_generated"
+                      placeholder="auto_key"
                       className="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs"
                     />
                   </div>
                 </div>
-
                 {(newAttrType === "dropdown" ||
                   newAttrType === "multiSelect") && (
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-700">
-                      Comma-Separated Options *
+                      Options (Comma-separated)
                     </label>
                     <input
                       type="text"
                       required
                       value={newAttrOptions}
                       onChange={(e) => setNewAttrOptions(e.target.value)}
-                      placeholder="No, Yes - Petrol Car, Yes - EV"
+                      placeholder="No, Yes"
                       className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs"
                     />
                   </div>
                 )}
-
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <label className="block text-[11px] font-bold text-slate-700">
-                    Optional: Attribute Dependency (Show only when...)
-                  </label>
-                  <div className="mt-2 grid grid-cols-2 gap-2">
-                    <select
-                      value={newAttrDependsKey}
-                      onChange={(e) => setNewAttrDependsKey(e.target.value)}
-                      className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs"
-                    >
-                      <option value="">-- Always Visible --</option>
-                      {selectedBuilderSection.attributes.map((a) => (
-                        <option key={a.key} value={a.key}>
-                          When {a.label} ==
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      type="text"
-                      disabled={!newAttrDependsKey}
-                      value={newAttrDependsVal}
-                      onChange={(e) => setNewAttrDependsVal(e.target.value)}
-                      placeholder="Exact value (e.g., Yes)"
-                      className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs disabled:bg-slate-100"
-                    />
-                  </div>
-                </div>
-
                 <button
                   type="submit"
                   className="w-full rounded-xl bg-indigo-600 py-2 text-xs font-bold text-white shadow hover:bg-indigo-700"
                 >
-                  + Append Attribute to Section Draft
+                  + Append Attribute
                 </button>
               </form>
             </div>
 
-            {/* Publish / Save Draft Box */}
             <div className="rounded-2xl border border-emerald-300 bg-emerald-50/50 p-5 shadow-sm">
               <h3 className="text-xs font-bold uppercase tracking-wider text-emerald-950">
-                Publish & Version Governance
+                Publish Schema
               </h3>
-              <p className="mt-1 text-xs text-emerald-800">
-                Save changes as a working draft or publish a new version so
-                Sales Reps see the updated form immediately.
-              </p>
-
               <input
                 type="text"
                 value={changelogInput}
                 onChange={(e) => setChangelogInput(e.target.value)}
-                placeholder="Version release notes (e.g., Added Trade-In & EV fields)..."
+                placeholder="Release notes..."
                 className="mt-3 w-full rounded-lg border border-emerald-300 bg-white px-3 py-2 text-xs"
               />
-
               <div className="mt-3 flex gap-2">
                 <button
                   type="button"
                   onClick={handleSaveDraftVersion}
-                  className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-white py-2 text-xs font-bold text-slate-800 hover:bg-slate-50"
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-white py-2 text-xs font-bold text-slate-800"
                 >
-                  <Save className="h-3.5 w-3.5" />
-                  Save as Draft
+                  <Save className="h-3.5 w-3.5" /> Save Draft
                 </button>
                 <button
                   type="button"
                   onClick={handlePublishNewVersion}
-                  className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-emerald-600 py-2 text-xs font-bold text-white shadow hover:bg-emerald-700"
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-emerald-600 py-2 text-xs font-bold text-white shadow"
                 >
-                  <Rocket className="h-3.5 w-3.5" />
-                  Publish New Version
+                  <Rocket className="h-3.5 w-3.5" /> Publish
                 </button>
               </div>
             </div>
           </section>
         </main>
       ) : (
-        /* ================= VIEW 2: DEALERSHIP LEAD WORKSPACE (RENDERS PUBLISHED FORM) ================= */
+        /* ================= VIEW 2: WORKSPACE (WITH ADVANCED SEARCH & CAF QUOTE SELECTOR) ================= */
         <main className="mx-auto grid max-w-[1650px] grid-cols-12 gap-4 p-4">
-          {/* LEFT COLUMN (3 cols): Lead Inbox & Pool */}
-          <section className="col-span-12 space-y-2.5 lg:col-span-3">
-            <div className="flex items-center justify-between px-1">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                Lead Inbox ({filteredLeads.length})
-              </h2>
-            </div>
-
-            {filteredLeads.map((lead) => {
-              const isSelected = lead.id === draft.id;
-              const inPool = !lead.basicDetails.originatorRep;
-              const hasDap = lead.productPricing.some(
-                (p) => p.proposedDiscountPct > 5,
-              );
-
-              return (
-                <div
-                  key={lead.id}
-                  onClick={() => handleSelectLead(lead)}
-                  className={`cursor-pointer rounded-xl border p-3.5 transition ${
-                    isSelected
-                      ? "border-indigo-600 bg-indigo-50/70 shadow-sm ring-1 ring-indigo-600"
-                      : "border-slate-200 bg-white hover:border-slate-300"
+          {/* LEFT COLUMN: Advanced Search Bar + Lead Inbox */}
+          <section className="col-span-12 space-y-3 lg:col-span-3">
+            <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+              <div className="flex items-center justify-between pb-2">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                  Lead Inbox ({filteredLeads.length})
+                </h2>
+                <button
+                  onClick={() => setShowAdvancedSearch(!showAdvancedSearch)}
+                  className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold transition ${
+                    showAdvancedSearch
+                      ? "bg-indigo-600 text-white"
+                      : "bg-slate-100 text-slate-700 hover:bg-slate-200"
                   }`}
                 >
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[11px] font-bold text-indigo-600">
-                          {lead.id}
-                        </span>
-                        {inPool ? (
-                          <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800">
-                            UNASSIGNED POOL
-                          </span>
-                        ) : (
-                          <span className="text-[10px] font-medium text-slate-500">
-                            • {lead.basicDetails.originatorRep.split(" (")[0]}
-                          </span>
-                        )}
-                      </div>
-                      <h3 className="mt-0.5 text-sm font-bold text-slate-900">
-                        {lead.basicDetails.customerName}
-                      </h3>
-                      <p className="text-xs text-slate-500">
-                        {lead.basicDetails.phone}
-                      </p>
-                    </div>
+                  <SlidersHorizontal className="h-3 w-3" /> Advanced Search
+                </button>
+              </div>
 
-                    <div>
-                      {lead.createdAtHoursAgo <= 1 && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-800">
-                          <Zap className="h-3 w-3 fill-amber-500" />{" "}
-                          {lead.createdAtHoursAgo}h
-                        </span>
-                      )}
-                      {lead.createdAtHoursAgo >= 6 &&
-                        lead.createdAtHoursAgo < 12 && (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-bold text-orange-800">
-                            <Flame className="h-3 w-3 fill-orange-500" />{" "}
+              {/* Search Input Bar */}
+              <div className="relative mt-1">
+                <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search name, phone, email, ID..."
+                  className="w-full rounded-xl border border-slate-300 bg-slate-50 py-2 pl-9 pr-3 text-xs text-slate-900 focus:border-indigo-600 focus:bg-white focus:outline-none"
+                />
+              </div>
+
+              {/* Advanced Search Collapsible Filters */}
+              {showAdvancedSearch && (
+                <div className="mt-3 space-y-2.5 border-t border-slate-100 pt-3">
+                  <div>
+                    <label className="mb-1 block text-[11px] font-bold text-slate-700">
+                      Filter by Lead Lifecycle Status
+                    </label>
+                    <select
+                      value={statusFilter}
+                      onChange={(e) => setStatusFilter(e.target.value)}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs"
+                    >
+                      <option value="ALL">All Statuses</option>
+                      <option value="New">New</option>
+                      <option value="Contacted">Contacted</option>
+                      <option value="Qualified">Qualified</option>
+                      <option value="Converted">Converted</option>
+                      <option value="Lost">Lost</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2.5">
+              {filteredLeads.map((lead) => {
+                const isSelected = lead.id === draft.id;
+                const inPool = !lead.basicDetails.originatorRep;
+                const hasDap = lead.productPricing.some(
+                  (p) => p.proposedDiscountPct > 5,
+                );
+
+                return (
+                  <div
+                    key={lead.id}
+                    onClick={() => handleSelectLead(lead)}
+                    className={`cursor-pointer rounded-xl border p-3.5 transition ${
+                      isSelected
+                        ? "border-indigo-600 bg-indigo-50/70 shadow-sm ring-1 ring-indigo-600"
+                        : "border-slate-200 bg-white hover:border-slate-300"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[11px] font-bold text-indigo-600">
+                            {lead.id}
+                          </span>
+                          {inPool ? (
+                            <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800">
+                              POOL
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-medium text-slate-500">
+                              • {lead.basicDetails.originatorRep.split(" (")[0]}
+                            </span>
+                          )}
+                        </div>
+                        <h3 className="mt-0.5 text-sm font-bold text-slate-900">
+                          {lead.basicDetails.customerName}
+                        </h3>
+                        <p className="text-xs text-slate-500">
+                          {lead.basicDetails.phone}
+                        </p>
+                      </div>
+
+                      <div>
+                        {lead.createdAtHoursAgo <= 1 && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-800">
+                            <Zap className="h-3 w-3 fill-amber-500" />{" "}
                             {lead.createdAtHoursAgo}h
                           </span>
                         )}
-                      {lead.createdAtHoursAgo >= 12 && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-bold text-sky-800">
-                          <Droplets className="h-3 w-3 fill-sky-500" />{" "}
-                          {lead.createdAtHoursAgo}h
+                        {lead.createdAtHoursAgo >= 6 &&
+                          lead.createdAtHoursAgo < 12 && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-bold text-orange-800">
+                              <Flame className="h-3 w-3 fill-orange-500" />{" "}
+                              {lead.createdAtHoursAgo}h
+                            </span>
+                          )}
+                        {lead.createdAtHoursAgo >= 12 && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-bold text-sky-800">
+                            <Droplets className="h-3 w-3 fill-sky-500" />{" "}
+                            {lead.createdAtHoursAgo}h
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                      <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                        {lead.basicDetails.leadStatus}
+                      </span>
+                      <span className="rounded-md bg-purple-100 px-2 py-0.5 text-[11px] font-semibold text-purple-800">
+                        {lead.productPricing.length} Car(s)
+                      </span>
+                      {hasDap && (
+                        <span className="rounded-md bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-900">
+                          DAP
                         </span>
                       )}
                     </div>
                   </div>
-
-                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                    <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
-                      {lead.basicDetails.leadStatus}
-                    </span>
-                    <span className="rounded-md bg-purple-100 px-2 py-0.5 text-[11px] font-semibold text-purple-800">
-                      {lead.productPricing.length} Vehicle(s)
-                    </span>
-                    {hasDap && (
-                      <span className="rounded-md bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-900">
-                        DAP: {lead.dapSection.dapStatus.split(" ")[0]}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </section>
 
-          {/* CENTER COLUMN (6 cols): Metro Line Sidebar + Published Collapsible Form */}
+          {/* CENTER COLUMN: Metro Line + Collapsible Published Form */}
           <section className="col-span-12 lg:col-span-6">
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
@@ -1254,13 +1302,9 @@ export default function App() {
                       {draft.basicDetails.originatorRep ||
                         "Unassigned (In Pool)"}
                     </span>
-                    <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
-                      Schema {publishedForm.versionNumber} (Published)
-                    </span>
                   </div>
                   <h2 className="text-base font-bold text-slate-900">
-                    {draft.basicDetails.customerName} — Dealership Consultation
-                    Flow
+                    {draft.basicDetails.customerName} — Consultation Flow
                   </h2>
                 </div>
 
@@ -1290,11 +1334,10 @@ export default function App() {
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-300 bg-emerald-50 p-3.5">
                   <div>
                     <h3 className="text-xs font-bold text-emerald-950">
-                      🎯 Unassigned Pool Lead (Pre-filled from Website Webhook)
+                      🎯 Unassigned Pool Lead
                     </h3>
                     <p className="text-xs text-emerald-800">
-                      Claim this lead from the pool to lock ownership and begin
-                      configuring quotes.
+                      Claim lead from pool to begin configuring quotes.
                     </p>
                   </div>
                   <button
@@ -1302,31 +1345,18 @@ export default function App() {
                     className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow hover:bg-emerald-700"
                   >
                     <UserPlus className="h-4 w-4" />
-                    Take Up Lead as {currentUser.name.split(" (")[0]}
+                    Take Up Lead
                   </button>
                 </div>
               )}
 
-              {isOwnedByOtherRep && (
-                <div className="mt-3 flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-900">
-                  <Lock className="h-4 w-4 text-rose-600" />
-                  <span>
-                    <strong>
-                      Locked to {draft.basicDetails.originatorRep}:
-                    </strong>{" "}
-                    Switch account in the top bar to edit.
-                  </span>
-                </div>
-              )}
-
               <div className="mt-4 grid grid-cols-12 gap-4">
-                {/* METRO LINE SIDEBAR */}
+                {/* Metro Line Sidebar */}
                 <aside className="col-span-12 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:col-span-4">
                   <div className="mb-3 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-slate-600">
                     <TrainTrack className="h-3.5 w-3.5 text-indigo-600" />
                     <span>Metro Route (5 Junctions)</span>
                   </div>
-
                   <div className="relative space-y-3 pl-2">
                     {metroJunctions.map((j, idx) => {
                       const isDone = j.status === "DONE";
@@ -1341,12 +1371,9 @@ export default function App() {
                         >
                           {idx < metroJunctions.length - 1 && (
                             <div
-                              className={`absolute left-2.5 top-5 h-7 w-0.5 ${
-                                isDone ? "bg-emerald-500" : "bg-slate-300"
-                              }`}
+                              className={`absolute left-2.5 top-5 h-7 w-0.5 ${isDone ? "bg-emerald-500" : "bg-slate-300"}`}
                             />
                           )}
-
                           <button
                             type="button"
                             onClick={() => jumpToJunction(j.id)}
@@ -1357,12 +1384,11 @@ export default function App() {
                                   ? "bg-slate-300 text-slate-600"
                                   : isBlocked
                                     ? "bg-amber-500 text-white"
-                                    : "bg-indigo-600 text-white ring-2 ring-indigo-200"
+                                    : "bg-indigo-600 text-white"
                             }`}
                           >
                             {idx + 1}
                           </button>
-
                           <div
                             onClick={() => jumpToJunction(j.id)}
                             className="cursor-pointer rounded-lg p-1 hover:bg-slate-200/60"
@@ -1371,13 +1397,7 @@ export default function App() {
                               {j.name}
                             </div>
                             <div
-                              className={`text-[11px] font-medium ${
-                                isBlocked
-                                  ? "text-amber-700"
-                                  : isDone
-                                    ? "text-emerald-700"
-                                    : "text-slate-500"
-                              }`}
+                              className={`text-[11px] font-medium ${isBlocked ? "text-amber-700" : isDone ? "text-emerald-700" : "text-slate-500"}`}
                             >
                               {j.sub}
                             </div>
@@ -1388,7 +1408,7 @@ export default function App() {
                   </div>
                 </aside>
 
-                {/* COLLAPSIBLE DYNAMIC FORM SECTIONS (RENDERS ACTIVE PUBLISHED VERSION!) */}
+                {/* Collapsible Form Sections */}
                 <div className="col-span-12 space-y-3 sm:col-span-8">
                   {publishedForm.sections.map((section: SectionSchema) => {
                     if (section.id === "dapSection" && !isDapRequired)
@@ -1430,7 +1450,6 @@ export default function App() {
                                 </p>
                               </div>
                             </div>
-
                             <button
                               type="button"
                               disabled={isUnassigned || isOwnedByOtherRep}
@@ -1452,18 +1471,9 @@ export default function App() {
                                   className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm"
                                 >
                                   <div className="mb-2.5 flex items-center justify-between border-b border-slate-100 pb-2">
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-xs font-bold text-indigo-600">
-                                        Vehicle #{idx + 1}
-                                      </span>
-                                      <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
-                                        {vehicleItem.source ===
-                                        "CUSTOMER_WEBHOOK"
-                                          ? "🌐 Selected by User via Webhook"
-                                          : "👤 Added by Rep"}
-                                      </span>
-                                    </div>
-
+                                    <span className="text-xs font-bold text-indigo-600">
+                                      Vehicle #{idx + 1}
+                                    </span>
                                     {draft.productPricing.length > 1 &&
                                       !isUnassigned &&
                                       !isOwnedByOtherRep && (
@@ -1472,13 +1482,13 @@ export default function App() {
                                           onClick={() =>
                                             removeProductPricingSection(idx)
                                           }
-                                          className="flex items-center gap-1 text-[11px] font-medium text-rose-600 hover:text-rose-700"
+                                          className="text-[11px] font-medium text-rose-600 hover:text-rose-700"
                                         >
-                                          <Trash2 className="h-3 w-3" /> Remove
+                                          <Trash2 className="h-3 w-3 inline" />{" "}
+                                          Remove
                                         </button>
                                       )}
                                   </div>
-
                                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                                     {section.attributes.map((attr) => {
                                       if (
@@ -1527,13 +1537,7 @@ export default function App() {
                       <div
                         id={`junction-${section.id}`}
                         key={section.id}
-                        className={`rounded-xl border ${
-                          isDapSection
-                            ? "border-amber-300 bg-amber-50/40"
-                            : isCafSection
-                              ? "border-emerald-300 bg-emerald-50/30"
-                              : "border-slate-200 bg-white"
-                        }`}
+                        className={`rounded-xl border ${isDapSection ? "border-amber-300 bg-amber-50/40" : isCafSection ? "border-emerald-300 bg-emerald-50/30" : "border-slate-200 bg-white"}`}
                       >
                         <div
                           onClick={() => toggleSection(section.id)}
@@ -1578,28 +1582,14 @@ export default function App() {
                                     key={attr.key}
                                     className={
                                       attr.type === "textarea" ||
-                                      attr.key === "consolidatedOrderSummary"
+                                      attr.key === "consolidatedOrderSummary" ||
+                                      attr.key === "selectedQuoteIds"
                                         ? "sm:col-span-2"
                                         : ""
                                     }
                                   >
                                     <label className="mb-1 block text-[11px] font-semibold text-slate-700">
                                       {attr.label}
-                                      {[
-                                        "customerName",
-                                        "phone",
-                                        "email",
-                                      ].includes(attr.key) && (
-                                        <span className="ml-1 text-[10px] font-normal text-indigo-600">
-                                          (Webhook Verified)
-                                        </span>
-                                      )}
-                                      {lockDapDecision && (
-                                        <span className="ml-1 text-[10px] font-normal text-amber-700">
-                                          (Switch to Rajesh Singh [Manager] to
-                                          approve)
-                                        </span>
-                                      )}
                                     </label>
                                     {renderAttributeControl(
                                       attr,
@@ -1621,15 +1611,15 @@ export default function App() {
                               <div className="mt-4 flex items-center justify-between border-t border-emerald-200 pt-3">
                                 <span className="text-xs font-medium text-emerald-900">
                                   {draft.cafSection.isCafSent
-                                    ? "✅ Master CAF emailed to client & Deal Closed."
-                                    : "Singleton CAF ready to dispatch."}
+                                    ? "✅ Master CAF emailed & Deal Closed."
+                                    : "Ready to dispatch."}
                                 </span>
                                 <button
                                   type="button"
                                   onClick={handleDispatchCaf}
                                   className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white shadow hover:bg-emerald-700"
                                 >
-                                  <Send className="h-3.5 w-3.5" />
+                                  <Send className="h-3.5 w-3.5" />{" "}
                                   {draft.cafSection.isCafSent
                                     ? "Resend CAF"
                                     : "Email Master CAF"}
@@ -1646,7 +1636,7 @@ export default function App() {
             </div>
           </section>
 
-          {/* RIGHT COLUMN (3 cols): Persistent Chronological Activity Timeline */}
+          {/* RIGHT COLUMN: Follow-Up Activity Logger & Timeline */}
           <section className="col-span-12 space-y-4 lg:col-span-3">
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <h2 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-500">
@@ -1664,8 +1654,8 @@ export default function App() {
                   onChange={(e) => setQuickNote(e.target.value)}
                   placeholder={
                     isUnassigned
-                      ? "Claim lead from pool first to log activities..."
-                      : "Log follow-up note (e.g., Called customer)..."
+                      ? "Claim lead first..."
+                      : "Log follow-up note..."
                   }
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:border-indigo-600 focus:outline-none disabled:bg-slate-100"
                 />
@@ -1674,16 +1664,15 @@ export default function App() {
                   disabled={isUnassigned || isOwnedByOtherRep}
                   className="w-full rounded-lg bg-slate-900 py-2 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-40"
                 >
-                  + Log Follow-Up Activity
+                  + Log Activity
                 </button>
               </form>
 
               <div className="mt-4 border-t border-slate-100 pt-3">
                 <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-slate-500">
-                  <Clock className="h-3.5 w-3.5" />
-                  Chronological Activity Log ({draft.activities.length})
+                  <Clock className="h-3.5 w-3.5" /> Timeline (
+                  {draft.activities.length})
                 </h3>
-
                 <div className="mt-3 max-h-[540px] space-y-2.5 overflow-y-auto pr-1">
                   {draft.activities.map((act) => (
                     <div

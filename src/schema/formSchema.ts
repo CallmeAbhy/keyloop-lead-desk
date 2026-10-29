@@ -319,7 +319,7 @@ export const INITIAL_FORM_SECTIONS: SectionSchema[] = [
     id: "cafSection",
     title: "5. CAF (Customer Acceptance Form — Final Master Order)",
     subtitle:
-      "Singleton final step. Consolidates all accepted vehicle quotes into one binding order emailed to the buyer.",
+      "Select specific accepted quote(s) to bundle into the binding final sales contract.",
     isRepeatable: false,
     attributes: [
       {
@@ -329,8 +329,15 @@ export const INITIAL_FORM_SECTIONS: SectionSchema[] = [
         isSystemLocked: true,
       },
       {
+        key: "selectedQuoteIds",
+        label: "Select Accepted Quote(s) for CAF Bundle",
+        type: "multiSelect",
+        options: [],
+        isSystemLocked: true,
+      },
+      {
         key: "consolidatedOrderSummary",
-        label: "Consolidated Vehicles & Final Deal Value",
+        label: "Consolidated Final Deal Value [$]",
         type: "readonly",
         isSystemLocked: true,
       },
